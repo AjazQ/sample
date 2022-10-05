@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0px;
+        border: 0;
+        overflow: hidden; /*  Disable scrollbars */
+        display: block; /* No floating content on sides */
+      }
+    </style>
+  </head>
+  <body></body>
+</html>
+<canvas id="gc" width="800" height="400"></canvas>
+<script>
+  /** @type {CanvasRenderingContext2D} */
+
+  // Mouse interactivity
+  //var editor; // = new Editor(ctx, canv);
+
+  //var canvasPosition; //= canv.getBoundingClientRect();
+  class Editor {
+    constructor(ctx, canv) {
+      this.ctx = ctx;
+      this.canvas = canv;
+      this.width = canv.width;
+      this.height = canv.height;
+      this.mode = "edit";
+      this.toolbar = new ToolBar(this);
+      this.isChildDragging = false;
+      this.draggingObject;
+      this.clickProcessed = false;
+      this.clickedObject;
+      this.clickHandle = 0;
+      this.connectingNode = null;
+      this.connectionInProgress = false;
+      this.availableForConnection = null;
+      //this.connectors = new Map();
+      this.nodes = new Map();
+      //this.nodes.set("node1", new Node(this, "node1", 100, 100, "Node 1"));
+      //this.nodes.set("node2", new Node(this, "node2", 300, 100, "Node 2"));
+      //this.nodes.get("node1").connectToUndirected(this.nodes.get("node2"));
+      let mainNode = new Node(this, "node1", 300, 200, "Node 1");
+      this.nodes.set("node1", mainNode);
+      let r = 150;
+      let cnt = 2;
+      for (let i = 0; i < 12; i++) {
+        let ang = (i * Math.PI) / 6;
+        let x = r * Math.cos(ang) + 300;
+        let y = r * Math.sin(ang) + 200;
+        let key = "node" + cnt;
+        let node = new Node(this, key, x, y, key);
+        this.nodes.set(key, node);
+        mainNode.connectToUndirected(node);
+        cnt++;
+      }
+      this.connectors = this.generateConnectors();
+      //this.nodes.push(new Node(this, 100, 100, "x"));
+      //this.nodes.push(new Node(this, 300, 100, "y"));
+    }
+
+    requestConnectingStart(node) {
+      if (!this.connectingNode) {
+        this.connectingNode = node;
+        node.isConnecting = true;
+        this.connectionInProgress = true;
+        return true;
+      }
+      return false;
+    }
+    requestMakeConnection(node) {
+      if (
+        this.connectingNode &&
+        !this.connectingNode.isConnected(node) &&
+        !node.isConnected(this.connectingNode)
+      ) {
+        //connect these nodes
+        this.connectingNode.connectToUndirected(node);
+        let key = this.connectingNode.key + "." + node.key;
+        this.connectors.set(
+          key,
+          new Connector(editor, this.connectingNode, node)
+        );
+        this.connectingNode.isConnecting = false;
+        this.connectionInProgress = false;
+        this.connectingNode = null;
+        return true;
+      }
+
+      return false;
+    }
+    requestCancelConnection(node) {
+      if (node == this.connectingNode) {
+        node.isConnecting = false;
+        this.connectionInProgress = false;
+        this.connectingNode = null;
+        return true;
+      }
+      return false;
+    }
+    requestAvailableForConnection(node) {
+      if (node != this.connectingNode) {
+        node.availableForConnection = true;
+        this.availableForConnection = node;
+        return true;
+      }
+      return false;
+    }
+    requestCancelAvailableForConnection(node) {
+      if (node) {
+        node.availableForConnection = false;
+        this.availableForConnection = null;
+        return true;
+      }
+      return false;
+    }
+
+    resize() {
+      this.width = this.canvas.width;
+      this.height = this.canvas.height;
+    }
+    removeNode(obj) {
+      if (obj) {
+        //Check if node is connected with some other node
+        if (obj.nodes) {
+          let nodesArray = [...obj.nodes];
+          for (let i = 0; i < nodesArray.length; i++) {
+            let node = this.getNodeByKey(nodesArray[i]);
+            let sKey = obj.key + "." + node.key;
+            let revKey = node.key + "." + obj.key;
+            if (this.connectors.has(sKey)) {
+              this.connectors.delete(sKey);
+            }
+            if (this.connectors.has(revKey)) {
+              this.connectors.delete(revKey);
+            }
+            node.disconnectNode(obj);
+          }
+        }
+        this.nodes.delete(obj.key);
+      }
+    }
+    selectNode(obj) {
+      this.nodes.forEach((node) => {
+        if (node == obj) {
+          node.selected = true;
+        } else {
+          node.selected = false;
+        }
+      });
+    }
+    isConnectionButtonSelected() {
+      let btn = this.toolbar.getSelectedButton();
+      if (btn && btn.tag == "connection") {
+        return true;
+        console.log("connection button selected");
+      }
+      return false;
+    }
+    isNodeButtonSelected() {
+      let btn = this.toolbar.getSelectedButton();
+      if (btn && btn.tag == "node") {
+        return true;
+        console.log("Node button selected");
+      }
+      return false;
+    }
+    setClickProcessed(obj) {
+      if (obj) {
+        this.clickProcessed = true;
+        this.clickedObject = obj;
+      } else {
+        this.clickProcessed = false;
+        this.clickedObject = null;
+      }
+    }
+    generateConnectors() {
+      const connectors = new Map();
+      const editor = this;
+      this.nodes.forEach(function (value, key) {
+        if (value.nodes.size > 0) {
+          let cNodes = [...value.nodes];
+          for (let i = 0; i < cNodes.length; i++) {
+            let sKey = value.key + "." + cNodes[i];
+            let revKey = cNodes[i] + "." + value.key;
+            if (!(connectors.has(sKey) || connectors.has(revKey))) {
+              let node2 = editor.getNodeByKey(cNodes[i]);
+              connectors.set(sKey, new Connector(editor, value, node2));
+            }
+          }
+        }
+      });
+      return connectors;
+    }
+    getNodeByKey(key) {
+      if (this.nodes.has(key)) {
+        return this.nodes.get(key);
+      }
+      return null;
+    }
+    draw() {
+      ctx.fillStyle = "black";
+      ctx.fillRect(1, 1, this.width - 1, this.height - 1);
+      this.drawConnectors();
+      this.drawNodes();
+      this.toolbar.draw();
+      this.checkNewNodeClick;
+    }
+    update() {
+      this.clickProcessed = false;
+      //this.clickProcessed(null);
+      this.toolbar.update();
+      this.updateNodes();
+      this.updateConnectors();
+      if (!this.clickProcessed) {
+        this.checkForNewNodes();
+      }
+    }
+    checkForNewNodes() {
+      if (
+        this.isNodeButtonSelected() &&
+        mouse.click &&
+        !this.clickProcessed &&
+        !this.isChildDragging &&
+        this.clickHandle != mouse.randId &&
+        !this.toolbar.pointInRange(mouse.x, mouse.y) &&
+        this.getNodeInRange(mouse.x, mouse.y, 15, 15) == null
+      ) {
+        this.clickHandle = mouse.randId;
+        let key = new Date().getTime();
+        let node = new Node(this, key, mouse.x, mouse.y, "N");
+        this.nodes.set(key, node);
+      }
+    }
+    updateNodes() {
+      this.nodes.forEach((node) => {
+        node.update();
+      });
+    }
+    updateConnectors() {
+      this.connectors.forEach((connector) => {
+        connector.update();
+      });
+    }
+    drawConnectors() {
+      this.connectors.forEach((connector) => {
+        connector.draw();
+      });
+    }
+    requestConnectorSelect(obj) {
+      this.connectors.forEach((c) => {
+        c.selected = false;
+      });
+      obj.selected = true;
+    }
+    drawNodes() {
+      this.nodes.forEach((node) => {
+        node.draw();
+      });
+    }
+    checkNewNodeClick() {
+      if (mouse.click) {
+      }
+    }
+    registerDragObject(obj) {
+      if (!this.draggingObject) {
+        this.draggingObject = obj;
+        this.isChildDragging = true;
+        obj.isDragging = true;
+        return true;
+      }
+      if (obj == this.draggingObject) {
+        obj.isDragging = true;
+        return true;
+      }
+      return false;
+    }
+    unregisterDragObject(obj) {
+      if (!this.draggingObject) {
+        return false;
+      }
+      if (this.draggingObject == obj) {
+        this.draggingObject = null;
+        this.isChildDragging = false;
+        obj.isDragging = false;
+        return true;
+      }
+      return false;
+    }
+    isObjectDragging(obj) {
+      if (this.draggingObject && this.draggingObject == obj) {
+        return true;
+      }
+      return false;
+    }
+    getNodeInRange(px, py, dx, dy) {
+      let retNode = null;
+      this.nodes.forEach((node) => {
+        let x1 = node.x + node.width / 2,
+          y1 = node.y + node.height / 2;
+        let x2 = x1 + dx,
+          y2 = y1 + dy;
+        x1 -= dx;
+        y1 -= dy;
+        if (px > x1 && px < x2 && py > y1 && py < y2) {
+          retNode = node;
+          return;
+        }
+      });
+      return retNode;
+    }
+  }
+
+  class ToolBar {
+    constructor(editor) {
+      this.editor = editor;
+      this.ctx = editor.ctx;
+      this.canvas = editor.canvas;
+      this.x = 5;
+      this.y = 5;
+      this.x1 = 80; //120;
+      this.width = this.x1 - this.x;
+      this.height = this.y1 - this.y;
+      this.y1 = 140; // this.editor.height - 10;
+      this.titleHeight = 18;
+      this.buttons = [];
+      this.hover = false;
+      let buttonHeight = 30;
+      let buttonWidth = this.x1 - this.x - 2;
+      let buttonStartY = this.y + this.titleHeight + 10;
+      this.mouseX = 0;
+      this.mouseY = 0;
+      this.isDragging = false;
+
+      for (let i = 0; i < 2; i++) {
+        let bY = buttonStartY + i * (buttonHeight + 5);
+        let bX = this.x + 3;
+        this.buttons.push(
+          new Button(
+            this,
+            bX,
+            bY,
+            buttonWidth,
+            buttonHeight,
+            i == 0 ? "Node" : "Connection",
+            i == 0 ? "node" : "connection"
+          )
+        );
+        /*
+         this.buttons.push(
+           new Button(
+             this,
+             bX,
+             bY,
+             buttonWidth,
+             buttonHeight,
+             "Button " + Number(i + 1)
+           )
+         );*/
+      }
+      // console.log(this.buttons);
+    }
+    draw() {
+      this.ctx.save();
+      this.ctx.globalAlpha = this.hover ? 1 : 0.9;
+      this.ctx.fillStyle = "white";
+      this.ctx.fillRect(this.x, this.y, this.x1, this.y1);
+      this.ctx.fillStyle = "rgb(63,169,245)";
+      this.ctx.fillRect(this.x + 2, this.y + 2, this.x1 - 4, this.titleHeight);
+      //ctx.font = "30px Arial";
+      this.ctx.fillStyle = "white";
+      let _x = this.x + 10; //+ (this.x1 - this.x) / 2;
+      let _y = this.y + this.titleHeight - 2;
+      this.ctx.textAlign = "left";
+      this.ctx.fillText("Tool Box", _x, _y);
+      this.ctx.textAlign = "center";
+      /*this.ctx.fillText(
+         "Tool Box",
+         this.x + (this.x1 - this.x) / 2,
+         this.y + 15
+       );*/
+      this.buttons.map((btn) => {
+        btn.draw();
+      });
+      this.ctx.restore();
+    }
+    update() {
+      if (
+        mouse.x > this.x &&
+        mouse.x < this.x + this.x1 &&
+        mouse.y > this.y &&
+        mouse.y < this.y + this.y1
+      ) {
+        this.hover = true;
+        let isInsideButton = false;
+        this.buttons.map((btn) => {
+          btn.update();
+          isInsideButton = isInsideButton | btn.hover;
+        });
+        if (
+          !isInsideButton &&
+          mouse.click &&
+          this.editor.registerDragObject(this)
+        ) {
+          this.mouseX = mouse.x - this.x;
+          this.mouseY = mouse.y - this.y;
+          this.editor.clickProcessed = true;
+          //this.isDargging = true;
+        } else if (this.isDragging) {
+          this.mouseX = 0;
+          this.mouseY = 0;
+          //this.isDargging = false;
+          if (this.editor.isObjectDragging(this)) {
+            this.editor.unregisterDragObject(this);
+          }
+        }
+      } else {
+        if (this.hover) {
+          this.buttons.map((btn) => {
+            btn.update();
+          });
+        }
+        this.hover = false;
+      }
+
+      if (this.isDragging) {
+        if (mouse.click) {
+          let w = this.width;
+          let h = this.height;
+          this.x = mouse.x - this.mouseX;
+          this.y = mouse.y - this.mouseY;
+          this.editor.clickProcessed = true;
+          //console.log(this.mouseX);
+          this.buttons.map((btn) => {
+            btn.dragging();
+          });
+        } else {
+          //this.dragging = false;
+          //this.parent.isChildDragging = false;
+          if (this.editor.isObjectDragging(this)) {
+            this.editor.unregisterDragObject(this);
+          }
+          this.x =
+            this.x < 5
+              ? 5
+              : this.x > this.canvas.width - this.width - 5
+              ? this.canvas.width - this.width - 5
+              : this.x;
+        }
+
+        //this.y=mouse.y-this.mouseY;
+      }
+    }
+    clearAllButtonSelected() {
+      this.buttons.map((btn) => {
+        btn.selected = false;
+      });
+    }
+    getSelectedButton() {
+      let selectedBtn = null;
+      this.buttons.map((btn) => {
+        if (btn.selected) {
+          selectedBtn = btn;
+          return;
+        }
+      });
+      return selectedBtn;
+    }
+    pointInRange(px, py) {
+      if (
+        px > this.x &&
+        px < this.x + this.x1 &&
+        py > this.y &&
+        py < this.y + this.y1
+      ) {
+        return true;
+      }
+      return false;
+    }
+  }
+
+  class Button {
+    constructor(parent, x, y, width, height, text, tag) {
+      this.parent = parent;
+      this.ctx = parent.ctx;
+      this.x = x;
+      this.y = y;
+      this.deltaX = x - parent.x; //will be used in dragging
+      this.deltaY = y - parent.y;
+      this.width = width;
+      this.height = height;
+      this.text = text;
+      this.tag = tag;
+      this.backColor = "rgb(0,116,188)";
+      this.textColor = "white";
+      this.hover = false;
+      this.selected = false;
+      this.selectedColor = "rgb(122,201,68)";
+      this.clickHandle = 0;
+      //console.log(this.x, this.y, this.x + this.width, this.y + this.height);
+    }
+    draw() {
+      this.ctx.save();
+      this.ctx.globalAlpha = this.hover ? 1 : 0.9;
+      this.ctx.fillStyle = this.selected ? this.selectedColor : this.backColor;
+      this.ctx.fillRect(this.x, this.y, this.width, this.height);
+      this.ctx.fillStyle = this.textColor;
+      let _x = this.x + this.width / 2;
+      let _y = this.y + this.height / 2;
+      this.ctx.textAlign = "center";
+      this.ctx.fillText(this.text, _x, _y);
+      this.ctx.restore();
+    }
+    update() {
+      if (this.parent.isDragging) {
+        return;
+      }
+      if (
+        mouse.x > this.x &&
+        mouse.x < this.x + this.width &&
+        mouse.y > this.y &&
+        mouse.y < this.y + this.height
+      ) {
+        this.hover = true;
+        //console.log(mouse.randId, this.clickHandle);
+        if (
+          mouse.click &&
+          mouse.randId != this.clickHandle &&
+          !this.parent.isChildDragging
+        ) {
+          this.selected = !this.selected;
+          this.clickHandle = mouse.randId;
+          if (this.selected) {
+            this.parent.clearAllButtonSelected();
+            this.selected = true;
+          }
+        }
+      } else {
+        this.hover = false;
+      }
+    }
+    dragging() {
+      this.x = this.parent.x + this.deltaX;
+      this.y = this.parent.y + this.deltaY;
+    }
+  }
+  class Connector {
+    constructor(parent, node1, node2, directed) {
+      this.parent = parent;
+      this.ctx = this.parent.ctx;
+      this.node1 = node1;
+      this.node2 = node2;
+      this.directed = directed || false;
+      this.color = "white";
+      this.selectedColor = "orange";
+      this.path = null;
+      this.hover = false;
+      this.clickHandle = 0;
+      this.rect = null;
+      this.selected = false;
+      this.startX=node1.x;//(node1.x<node2.x)?node1.x:node2.x;
+      this.endX=node2.x;
+      this.dx=(node1.x>node2.x)?-5:5;
+      this.lX = this.startX;
+      this.lY = 0;
+      this.lSlope = (node2.y - node1.y) / (node2.x - node1.x);
+      this.lb = node1.y - (this.lSlope * node1.x);
+      this.animationObj = { lastTimeStamp: 0, timeToWait: 50 };
+    }
+    isPointInPath(px, py) {
+      /* let rect = this.rect;
+       let angle = rect.rotation;
+       let newX = Math.cos(angle) * px - Math.sin(angle) * py; //+rect.rectX;
+       let newY = Math.sin(angle) * px + Math.cos(angle) * py; //+rect.rectY;
+       let r = this.defLineAsRect(px, py, px, py, 2); */
+      //console.log(this.isOnLine(this.node1, this.node2, mouse, 50));
+      let r = this.rect;
+      if (r) {
+        this.ctx.save();
+        this.ctx.beginPath();
+        this.ctx.translate(r.translateX, r.translateY);
+        this.ctx.rotate(r.rotation);
+        this.ctx.rect(r.rectX, r.rectY, r.rectWidth, r.rectHeight);
+        this.ctx.translate(-r.translateX, -r.translateY);
+        this.ctx.rotate(-r.rotation);
+        this.ctx.restore();
+        return this.ctx.isPointInPath(px, py);
+      }
+      return false;
+    }
+
+    isOnLine(a, b, p, tolerance) {
+      var dy = a.y - b.y;
+      var dx = a.x - b.x;
+      if (dy == 0) {
+        //horizontal line
+        if (p.y == a.y || (p.y >= a.y - tolerance && p.y <= a.y + tolerance)) {
+          if (a.x > b.x) {
+            if (p.x <= a.x && p.x >= b.x) return true;
+          } else {
+            if (p.x >= a.x && p.x <= b.x) return true;
+          }
+        }
+      } else if (dx == 0) {
+        //vertical line
+        if (p.x == a.x) {
+          if (a.y > b.y) {
+            if (p.y <= a.y && p.y >= b.y) return true;
+          } else {
+            if (p.y >= a.y && p.y <= b.y) return true;
+          }
+        }
+      } else {
+        //slope line
+        var _p = dy / dx;
+        var py = _p * p.x;
+        if (py <= p.y + tolerance && py >= p.y - tolerance) {
+          if (a.x > b.x) {
+            if (p.x <= a.x && p.x >= b.x) return true;
+          } else {
+            if (p.x >= a.x && p.x <= b.x) return true;
+          }
+        }
+      }
+      return false;
+    }
+    rectRotate(pointX, pointY, rectWidth, rectHeight, angle) {
+      // convert angle to radians
+      angle = (angle * Math.PI) / 180.0;
+      // calculate center of rectangle
+      var centerX = rectWidth / 2.0;
+      var centerY = rectHeight / 2.0;
+      // get coordinates relative to center
+      var dx = pointX - centerX;
+      var dy = pointY - centerY;
+      // calculate angle and distance
+      var a = Math.atan2(dy, dx);
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      // calculate new angle
+      var a2 = a + angle;
+      // calculate new coordinates
+      var dx2 = Math.cos(a2) * dist;
+      var dy2 = Math.sin(a2) * dist;
+      // return coordinates relative to top left corner
+      return { newX: dx2 + centerX, newY: dy2 + centerY };
+    }
+    updateAnimateLine() {
+      let ao = this.animationObj;
+      let tElapsed = new Date() - ao.lastTimeStamp;
+      if (tElapsed > ao.timeToWait) {
+        ao.lastTimeStamp = new Date();
+        this.lX += this.dx;
+        if(this.dx>0){          
+          if (this.lX > this.endX) {
+            this.lX = this.startX;
+          }
+        }else{
+          if(this.lX<this.endX){
+            this.lX=this.startX;
+          }
+        }
+        this.lY = this.lSlope * this.lX+this.lb; //- this.lb;
+      }
+    }
+    update() {
+      if (this.parent.isConnectionButtonSelected()) {
+        /*if (this.isPointInPath(mouse.x, mouse.y)) {
+           this.hover = true;
+         } else {
+           this.hover = false;
+         }*/
+        if (
+          mouse.click &&
+          mouse.randId != this.clickHandle &&
+          !this.parent.toolbar.pointInRange(mouse.x, mouse.y)
+        ) {
+          this.clickHandle = mouse.randId;
+          if (this.isPointInPath(mouse.x, mouse.y)) {
+            if (this.selected) {
+              this.selected = false;
+            } else {
+              this.parent.requestConnectorSelect(this);
+            }
+          } /* console.log(
+             `${this.node1.key}-${this.node2.key} ${x1},${x2},${y1},${y2} mouse:${mouse.x},${mouse.y}`
+           ); */
+          /*           let x1 = this.node1.x + this.node1.width / 2;
+           let y1 = this.node1.y + this.node1.height / 2;
+           let x2 = this.node2.x + this.node2.width / 2;
+           let y2 = this.node2.y + this.node2.height / 2;
+  */
+          //this.isPointInPath(mouse.x, mouse.y);
+          //console.log(this.rect);
+        }
+      } else {
+        this.hover = false;
+      }
+      if (this.selected) {
+        this.updateAnimateLine();
+      }
+    }
+    draw() {
+      let x1 = this.node1.x + this.node1.width / 2;
+      let y1 = this.node1.y + this.node1.height / 2;
+      let x2 = this.node2.x + this.node2.width / 2;
+      let y2 = this.node2.y + this.node2.height / 2;
+      this.ctx.save();
+      this.ctx.globalAlpha = this.hover ? 1 : 0.5;
+      this.ctx.strokeStyle = this.selected ? this.selectedColor : this.color;
+      let color = this.selected ? this.selectedColor : this.color;
+      let path = new Path2D();
+      let r = this.defLineAsRect(x1, y1, x2, y2, 2);
+      this.rect = r;
+
+      this.ctx.beginPath();
+      this.ctx.translate(r.translateX, r.translateY);
+      this.ctx.rotate(r.rotation);
+      this.ctx.rect(r.rectX, r.rectY, r.rectWidth, r.rectHeight);
+
+      this.ctx.translate(-r.translateX, -r.translateY);
+      this.ctx.rotate(-r.rotation);
+      if (this.ctx.isPointInPath(mouse.x, mouse.y)) {
+        this.hover = true;
+      } else {
+        this.hover = false;
+      }
+      this.ctx.globalAlpha = this.hover ? 1 : 0.5;
+
+      this.ctx.fillStyle = color;
+      this.ctx.strokeStyle = color;
+
+      this.ctx.fill();
+      this.ctx.stroke();
+      this.ctx.restore();
+      this.ctx.save();
+      if (this.selected) {
+        this.ctx.strokeStyle = "white";
+        this.ctx.fillStyle = "white";
+        this.ctx.rect(this.lX, this.lY, 5, 5);
+        this.ctx.stroke();
+        this.ctx.fill();
+      }
+      this.ctx.restore();
+      /*
+      this.ctx.save();
+      this.ctx.beginPath();
+      this.ctx.moveTo(x1, y1);
+      this.ctx.lineTo(x2, y2);
+      this.ctx.strokeStyle = "red";
+      this.ctx.stroke();*/
+      //this.ctx.fill(path);
+      //this.ctx.stroke(path);
+      /*
+       path.moveTo(x1, y1);
+       path.lineTo(x2, y2);
+       this.ctx.stroke(path);
+         */
+      this.path = path;
+
+      /*this.ctx.beginPath();
+       this.ctx.moveTo(x1, y1);
+       this.ctx.lineTo(x2, y2);
+       this.ctx.stroke();*/
+
+      this.ctx.restore();
+    }
+    defLineAsRect(x1, y1, x2, y2, lineWidth) {
+      var dx = x2 - x1;
+      var dy = y2 - y1;
+      var lineLength = Math.sqrt(dx * dx + dy * dy);
+      var lineRadianAngle = Math.atan2(dy, dx);
+
+      return {
+        translateX: x1,
+        translateY: y1,
+        rotation: lineRadianAngle,
+        rectX: 0,
+        rectY: -lineWidth / 2,
+        rectWidth: lineLength,
+        rectHeight: lineWidth,
+      };
+    }
+  }
+
+  class Node {
+    constructor(parent, key, x, y, text) {
+      this.key = key;
+      this.parent = parent;
+      this.ctx = parent.ctx;
+      this.x = x;
+      this.y = y;
+      this.text = text;
+      this.selectedColor = "orange";
+      this.color = "cyan";
+      this.width = 10;
+      this.height = 10;
+      this.textColor = "red";
+      this.selected = false;
+      this.nodes = new Set();
+      this.mouseX = 0;
+      this.mouseY = 0;
+      this.clickHandle = 0;
+      this.isDargging = false;
+      this.hover = false;
+      this.draggingTimeout = 200; // 200 milliseconds
+      this.clickTimeStamp = null;
+      this.alertShown = false;
+      this.keyHandle = 0;
+      this.isConnecting = false;
+      this.availableForConnection = false;
+    }
+    connectToDirected(node) {
+      if (!this.nodes.has(node.key)) {
+        this.nodes.add(node.key);
+      }
+    }
+    connectToUndirected(node) {
+      if (!this.nodes.has(node.key)) {
+        this.nodes.add(node.key);
+        node.connectToDirected(this);
+      }
+    }
+    isConnected(node) {
+      return this.nodes.has(node.key);
+    }
+    disconnectNode(node) {
+      if (this.nodes.has(node.key)) {
+        this.nodes.delete(node.key);
+        if (node.isConnected(this)) {
+          node.disconnectNode(this);
+        }
+        return true;
+      }
+      return false;
+    }
+    handlekeys(e) {
+      var code = e.keyCode;
+      let dv = 5;
+      if (this.keyHandle == keys.randId) {
+        return;
+      }
+      this.keyHandle = keys.randId; //prevent multiple key events
+      switch (code) {
+        case 37:
+          this.x -= dv;
+          break; //Left key
+        case 38:
+          this.y -= dv;
+          break; //Up key
+        case 39:
+          this.x += dv;
+          break; //Right key
+        case 40:
+          this.y += dv;
+          break; //Down key
+        case 46:
+          let proceed = confirm("You want to delete,Are you sure? ");
+          if (proceed) {
+            this.parent.removeNode(this);
+          }
+          console.log("Del Key");
+          keys.keydown = null;
+          break; //del
+        case 13:
+          var text = prompt("Please enter text", this.text);
+          if (text != null) {
+            this.text = text;
+          }
+          keys.keydown = null;
+          break; //Enter
+        default:
+          if (!this.alertShown) {
+            alert(code); //Everything else
+            this.alertShown = true;
+          }
+      }
+    }
+    update() {
+      this.hover = false;
+      if (this.isDargging) {
+        if (mouse.click) {
+          let w = this.width;
+          let h = this.height;
+          this.x = mouse.x - this.mouseX;
+          this.y = mouse.y - this.mouseY;
+          return;
+        } else {
+          if (this.isDargging) {
+            this.parent.unregisterDragObject(this);
+          }
+          this.isDargging = false;
+        }
+      }
+      if (
+        mouse.x > this.x &&
+        mouse.x < this.x + this.width &&
+        mouse.y > this.y &&
+        mouse.y < this.y + this.height
+      ) {
+        if (this.parent.isConnectionButtonSelected()) {
+          if (
+            this.parent.connectionInProgress &&
+            this.parent.connectingNode != this &&
+            !this.parent.connectingNode.isConnected(this) &&
+            !this.isConnected(this.parent.connectingNode)
+          ) {
+            if (mouse.click) {
+              this.parent.requestAvailableForConnection(this);
+            } else {
+              console.log("Connection Requested");
+              this.parent.requestMakeConnection(this);
+            }
+          } else if (this.availableForConnection) {
+            this.parent.requestCancelAvailableForConnection(this);
+          }
+
+          if (mouse.click && this.clickHandle != mouse.randId) {
+            if (
+              !this.isConnecting &&
+              this.parent.requestConnectingStart(this)
+            ) {
+              this.clickHandle = mouse.randId;
+              if (!this.selected) {
+                this.parent.selectNode(this);
+              }
+              this.parent.setClickProcessed(this);
+              console.log("Connecting...");
+            }
+          }
+        } else if (!this.parent.isNodeButtonSelected()) {
+          if (mouse.click && this.clickHandle != mouse.randId) {
+            if (this.selected) {
+              this.selected = false;
+            } else {
+              this.parent.selectNode(this);
+            }
+            this.clickHandle = mouse.randId;
+            this.clickTimeStamp = new Date();
+            this.parent.setClickProcessed(this);
+          }
+        } else {
+          if (mouse.click && this.clickHandle != mouse.randId) {
+            //mouse down
+            if (this.selected) {
+              this.selected = false;
+            } else {
+              this.parent.selectNode(this);
+            }
+
+            this.clickHandle = mouse.randId;
+            this.clickTimeStamp = new Date();
+            this.parent.setClickProcessed(this);
+          } else if (mouse.click && this.clickHandle == mouse.randId) {
+            //mouse is still down calculate time elapsed
+            let now = new Date();
+            let diff = now - this.clickTimeStamp;
+            if (diff > 200) {
+              //wait for 200 milisecond before start dragging
+              if (mouse.click && this.parent.registerDragObject(this)) {
+                //this.selected = true;
+                this.isDargging = true;
+                this.mouseX = mouse.x - this.x;
+                this.mouseY = mouse.y - this.y;
+              }
+            }
+          } else {
+            if (this.isDargging) {
+              this.parent.unregisterDragObject(this);
+            }
+            if (this.parent.clickedObject == this) {
+              this.parent.setClickProcessed(null);
+            }
+            this.isDargging = false;
+            this.hover = true;
+            this.clickTimeStamp = 0;
+          }
+        }
+      } else {
+        if (this.availableForConnection) {
+          this.parent.requestCancelAvailableForConnection(this);
+          console.log("C R");
+        }
+      }
+      if (this.selected) {
+        if (keys.keydown) {
+          this.handlekeys(keys.keydown);
+        }
+      }
+
+      if (this.isConnecting) {
+        if (!mouse.click) {
+          console.log("Done Connecting");
+          //this.parent.requestCancelConnection(this);
+        }
+      }
+      if (this.availableForConnection && mouse.click == false) {
+        //this.availableForConnection = false;
+        this.parent.requestCancelAvailableForConnection(this);
+      }
+    }
+    draw() {
+      this.ctx.save();
+      this.ctx.globalAlpha = this.hover ? 1 : 0.7;
+
+      if (this.isDargging || this.availableForConnection) {
+        let offset = 5;
+        this.ctx.strokeStyle = this.color;
+        this.ctx.strokeRect(
+          this.x - offset,
+          this.y - offset,
+          this.width + offset * 2,
+          this.height + offset * 2
+        );
+      }
+      if (this.isConnecting) {
+        let _x = this.x + this.width / 2;
+        let _y = this.y + this.height / 2;
+        this.ctx.strokeStyle = this.color;
+        this.ctx.moveTo(_x, _y);
+        this.ctx.lineTo(mouse.x, mouse.y);
+        this.ctx.stroke();
+      }
+      this.ctx.fillStyle = this.selected ? this.selectedColor : this.color;
+      this.ctx.fillRect(this.x, this.y, this.width, this.height);
+      this.ctx.fillStyle = this.textColor;
+      let _x = this.x + this.width / 2;
+      let _y = this.y - 5;
+      this.ctx.textAlign = "center";
+      this.ctx.fillText(this.text, _x, _y);
+      this.ctx.restore();
+    }
+  }
+  var editor; // = new Editor(ctx, canv);
+  window.onload = function () {
+    /*
+     canv = document.getElementById("gc");
+     ctx = canv.getContext("2d");
+     editor = new Editor(ctx, canv);
+     canvasPosition = canv.getBoundingClientRect();*/
+    //window.onkeydown = keypress;
+    setInterval(app, 1000 / 15);
+  };
+  function app() {
+    if (editor) {
+      editor.update();
+      editor.draw();
+    }
+  }
+  function resizeCanvas() {
+    canv.width = window.innerWidth;
+    canv.height = window.innerHeight;
+    if (editor) {
+      editor.resize();
+    }
+  }
+  var canv, ctx;
+  canv = document.getElementById("gc");
+  ctx = canv.getContext("2d");
+  var editor = new Editor(ctx, canv);
+  var canvasPosition = canv.getBoundingClientRect();
+  function initialize() {
+    resizeCanvas();
+  }
+  initialize();
+  const mouse = {
+    x: canv.width / 2,
+    y: canv.height / 2,
+    randId: 0,
+    click: false,
+  };
+  const keys = {
+    keydown: null,
+    keyup: null,
+    randId: 0,
+  };
+  canv.addEventListener("mousemove", function (e) {
+    //mouse.click = true;
+    mouse.x = e.x - canvasPosition.left;
+    mouse.y = e.y - canvasPosition.top;
+  });
+  window.addEventListener("mouseup", function (e) {
+    mouse.click = false;
+    mouse.randId = 0;
+  });
+  window.addEventListener("mousedown", function (e) {
+    mouse.click = true;
+    mouse.randId = Math.floor(Math.random() * 10);
+  });
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      keys.keydown = e;
+      keys.keyup = null;
+      keys.randId = Math.floor(Math.random() * 100);
+    },
+    false
+  );
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      keys.keydown = null;
+      keys.keyup = e;
+    },
+    false
+  );
+  window.addEventListener("resize", resizeCanvas, false);
+</script>
